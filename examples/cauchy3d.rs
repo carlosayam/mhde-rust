@@ -174,7 +174,7 @@ fn main_() {
     // of a lower triangular matrix into the Cholesky decomposition of a covariance
     // matrix and apply the operation to data
 
-    // items on the diagonal: n (obviously)
+    // items on the diagonal: D (obviously)
     let data: Vec<f64> = Vec::from_iter((0..dim).map(|_| dist.sample(&mut rng)));
     let diagonal = Param::from_tensor(Tensor::<AutoBE, 1>::from_data(data.as_slice(), &device));
 
