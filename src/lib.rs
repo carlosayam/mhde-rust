@@ -83,6 +83,76 @@ impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
     }
 }
 
+fn create_artifact_dir(artifact_dir: &str) {
+    // Remove existing artifacts before to get an accurate learner summary
+    std::fs::remove_dir_all(artifact_dir).ok();
+    std::fs::create_dir_all(artifact_dir).ok();
+}
+
+/*
+pub fn run<B: AutodiffBackend>(device: B::Device) {
+    create_artifact_dir(ARTIFACT_DIR);
+    // Config
+    let config_optimizer = AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5)));
+    let config = MnistTrainingConfig::new(config_optimizer);
+    B::seed(config.seed);
+
+    let model = Model::<B>::new(&device);
+
+    // Data
+    let batcher = MnistBatcher::default();
+
+    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::train());
+    let dataloader_test = DataLoaderBuilder::new(batcher)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::test());
+
+    // Model
+    let learner = LearnerBuilder::new(ARTIFACT_DIR)
+        .metric_train_numeric(AccuracyMetric::new())
+        .metric_valid_numeric(AccuracyMetric::new())
+        .metric_train_numeric(CpuUse::new())
+        .metric_valid_numeric(CpuUse::new())
+        .metric_train_numeric(CpuMemory::new())
+        .metric_valid_numeric(CpuMemory::new())
+        .metric_train_numeric(CpuTemperature::new())
+        .metric_valid_numeric(CpuTemperature::new())
+        .metric_train_numeric(LossMetric::new())
+        .metric_valid_numeric(LossMetric::new())
+        .with_file_checkpointer(CompactRecorder::new())
+        .early_stopping(MetricEarlyStoppingStrategy::new(
+            &LossMetric::<B>::new(),
+            Aggregate::Mean,
+            Direction::Lowest,
+            Split::Valid,
+            StoppingCondition::NoImprovementSince { n_epochs: 1 },
+        ))
+        .devices(vec![device.clone()])
+        .num_epochs(config.num_epochs)
+        .summary()
+        .build(model, config.optimizer.init(), 1e-4);
+
+    let model_trained = learner.fit(dataloader_train, dataloader_test);
+
+    config
+        .save(format!("{ARTIFACT_DIR}/config.json").as_str())
+        .unwrap();
+
+    model_trained
+        .save_file(
+            format!("{ARTIFACT_DIR}/model"),
+            &NoStdTrainingRecorder::new(),
+        )
+        .expect("Failed to save trained model");
+}
+*/
+
 pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     mut model: M,
     vec: Vec<f64>,
