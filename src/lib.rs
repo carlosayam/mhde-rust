@@ -34,6 +34,7 @@ pub fn forward<B: AutodiffBackend, M: ModelTrait<B>>(
     v.sum() * factor + 1.0
 }
 
+/*
 fn calculate_balls<B: Backend>(data: &Vec<f64>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
 
     // considered that the sample could be split to ensure i.i.d terms in the sum
@@ -61,6 +62,7 @@ fn calculate_balls<B: Backend>(data: &Vec<f64>, split: bool, device: &B::Device)
         Tensor::from_data(radii.as_slice(), device)
     )
 }
+*/
 
 pub struct TrainingConfig {
     pub num_runs: usize,
@@ -166,7 +168,7 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         config_optimizer: AdamConfig::new(),
     };
 
-    let balls = calculate_balls::<B>(&vec, split, &device);
+    let balls = (Tensor::from_data([1.0, 2.0], &device), Tensor::from_data([1.0, 2.0], &device)); // calculate_balls::<B>(&vec, split, &device);
 
     let mut optimizer = config.config_optimizer.init::<B, M>();
     let epsilon: f64 = 0.000001;

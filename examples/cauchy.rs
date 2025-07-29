@@ -3,9 +3,10 @@
 //! Use like `cargo run --example cauchy` to use the provided `config.yaml` example.
 //! 
 use std::fs;
+use std::iter::zip;
 
 use yaml_rust::{Yaml, YamlLoader};
-use ndarray::{array, Array1, Zip};
+use ndarray::{Array, Array1, Array2, s};
 
 use mhde::{run, ModelTrait};
 
@@ -161,18 +162,15 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
 
     let lower_matrix: Array2<f64> = {
         let mut res = Array::zeros((options.dim, options.dim));
-        let indices = Array::from_iter(0..options.dim);
-        Zip::from(res.rows_mut())
-            .and(options.lower)
-            .for_each(|mut dst, row_option| {
-                let arr = Array1::from_vec(row_option);
-                let len = row_option.len();
-                dst.slice_mut(s![..len]).assign(&arr);
-            });
+        for (mut dst, row_option) in zip(res.rows_mut().into_iter(), options.lower.iter()) {
+            let arr = Array1::from_vec(row_option.to_vec());
+            let len = row_option.len();
+            dst.slice_mut(s![..len]).assign(&arr);
+        }
         res
     };
 
-    let loc = Array1::from_vec(options.loc);
+    let loc = Array1::from_vec(options.loc.clone());
     let matrix = &lower_matrix.dot(&lower_matrix.t());
 
     let dist: Cauchy = Cauchy::new(0.0, 1.0).unwrap();
@@ -183,9 +181,9 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
     ));
 
     // now apply matrix and location transformation to sample
-    let sample = sample.iter().map(|row| row.dot(&matrix) + &loc).collect();
+    let sample = sample.iter().map(|row| row.dot(matrix) + &loc).collect();
 
-    vec
+    sample
 }
 
 /** 
@@ -244,5 +242,10 @@ fn main() {
 **/
 
 fn main() {
-    println!("{:?}", get_options());
+    let options = get_options();
+    println!("{:?}", options);
+    let sample = generate_sample(&options);
+    for obs in sample.iter() {
+        println!("{:?}", obs);
+    }
 }
