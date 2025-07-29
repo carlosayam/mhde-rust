@@ -180,7 +180,7 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
 
     // create sample from them
     let sample = Vec::from_iter((0..options.num).map(
-        |_| (0..options.dim).map(|ix| dist.sample(&mut rng)).collect::<Array1<f64>>()
+        |_| (0..options.dim).map(|_| dist.sample(&mut rng)).collect::<Array1<f64>>()
     ));
 
     // now apply matrix and location transformation to sample
@@ -189,6 +189,7 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
     sample
 }
 
+/// Calculate simple statistics from flat Vec, i.e. minimum, median and maximum
 fn min_median_max(numbers: &Vec<f64>) -> (f64, f64, f64) {
 
     let mut to_sort = numbers.clone();
@@ -224,7 +225,7 @@ fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::De
         let mut px = 0;
         for ix in 0..dim {
             res[px] = scale;
-            px += ix;
+            px += ix + 2;
         }
         Tensor::from_data(res.as_slice().unwrap(), &device)
     };
