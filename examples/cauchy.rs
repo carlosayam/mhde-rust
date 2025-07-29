@@ -35,8 +35,11 @@ use std::{f64::consts::PI, str::FromStr};
 /// for the covariance matrix
 #[derive(Module, Debug)]
 pub struct CauchyModel<B: Backend> {
+    // space dimension
     dim: usize,
+    // location for the multi-variate distribution
     loc: Param<Tensor<B, 1>>,
+    // Cholesky decomposition, as a flat parameter of length dim (dim + 1) / 2.
     lower: Param<Tensor<B, 1>>,
 }
 
@@ -80,7 +83,7 @@ struct Options {
 /// # location for Cauchy-distributed data; it must have `dim` number of items
 /// loc: <array of f64>
 /// # covariance matrix, specified as a lower triangular matrix; it is a series
-/// # of arrays with increasing number of elements, starting with 1 f64 number and
+/// # of arrays with increasing number of elements, starting with one f64 number and
 /// # ending with an array of `dim` f64 numbers
 /// lower:
 ///   - <array of f64, length 1>
@@ -186,7 +189,6 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
     sample
 }
 
-/** 
 fn min_median_max(numbers: &Vec<f64>) -> (f64, f64, f64) {
 
     let mut to_sort = numbers.clone();
@@ -201,33 +203,52 @@ fn min_median_max(numbers: &Vec<f64>) -> (f64, f64, f64) {
     (to_sort[0], med, to_sort[numbers.len()-1])
 }
 
+/// Given the sample, provide an initial CauchyModel with sensible initial location and lower
+/// triangular matrix.
+fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::Device) -> CauchyModel<B> {
 
-fn cauchy_model<B: Backend>(vec: &Vec<f64>, device: B::Device) -> CauchyModel<B> {
-    let (v_min, v_med, v_max) = min_median_max(&vec);
+    // flatten the data to obtain min, max and median
+    let flat: Vec<f64> = sample.into_iter().flat_map(|arr| arr.clone().into_raw_vec_and_offset().0).collect();
+    let (v_min, v_med, v_max) = min_median_max(&flat);
 
-    let loc: Tensor<B, 1> = Tensor::from_data([v_med], &device);
-    let scale: Tensor<B, 1> = Tensor::from_data([(v_max - v_min) / (vec.len() as f64)], &device);
+    // use median for location
+    let loc = vec![v_med; dim];
+    let loc: Tensor<B, 1> = Tensor::from_data(loc.as_slice(), &device);
+
+    // use min and max to estimate a simple scale, and populate just the diagonal for the initial
+    // Cholesky decomposition
+    let lower_size = dim * (dim + 1) / 2;
+    let scale = (v_max - v_min) / (sample.len() as f64);
+    let lower: Tensor<B, 1> = {
+        let mut res = Array::zeros((lower_size,));
+        let mut px = 0;
+        for ix in 0..dim {
+            res[px] = scale;
+            px += ix;
+        }
+        Tensor::from_data(res.as_slice().unwrap(), &device)
+    };
 
     CauchyModel {
+        dim: dim,
         loc: Param::from_tensor(loc),
-        scale: Param::from_tensor(scale),
+        lower: Param::from_tensor(lower),
     }
 }
 
 type AutoBE = Autodiff<NdArray<f64, i64>>;
 
 fn main() {
-    let mut options = Options { loc: 0.0, scale: 1.0, num: 1000, seed: None, split: false };
-    set_options(&mut options);
+    let options = get_options();
 
     let device: <AutoBE as Backend>::Device = Default::default();
-    let vec = generate(&options);
-    let model = cauchy_model::<AutoBE>(&vec, device);
+    let sample = generate_sample(&options);
+    let model = cauchy_model::<AutoBE>(options.dim, &sample, device);
 
     println!("Starting params");
-    println!("Loc: {}", model.loc.val().clone().into_scalar());
-    println!("Scale: {}\n", model.scale.val().clone().into_scalar());
-
+    println!("Loc: {:?}", model.loc.val());
+    println!("Scale: {:?}\n", model.lower.val());
+    /*
     let (iters, model) = run::<AutoBE, CauchyModel<AutoBE>>(
         model,
         vec,
@@ -238,14 +259,5 @@ fn main() {
     println!("Final params (iters={})", iters);
     println!("Loc: {}", model.loc.val().clone().into_scalar());
     println!("Scale: {}\n", model.scale.val().clone().into_scalar());
-}
-**/
-
-fn main() {
-    let options = get_options();
-    println!("{:?}", options);
-    let sample = generate_sample(&options);
-    for obs in sample.iter() {
-        println!("{:?}", obs);
-    }
+    */
 }
