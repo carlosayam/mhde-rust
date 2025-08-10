@@ -18,7 +18,7 @@ path = "examples/cauchy3d.rs"
 
 [dependencies]
 burn = { version = "0.18.0", features = ["autodiff", "ndarray"] }
-linfa-nn = "0.7.0"
+ball-tree = "0.5.1"
 ndarray = "0.16.1"
 num-traits = "0.2.19"
 rand = "0.8.5"

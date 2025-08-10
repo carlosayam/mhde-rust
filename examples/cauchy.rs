@@ -1,6 +1,6 @@
 //! Usage example using multivariate Cauchy-distributed vectors in R^d
 //! 
-//! Use like `cargo run --example cauchy` to use the provided `config.yaml` example.
+//! Use like `cargo run --example cauchy -- -c examples/config.yaml` to use the provided `config.yaml` example.
 //! 
 use std::fs;
 use std::iter::zip;
@@ -47,7 +47,7 @@ pub struct CauchyModel<B: Backend> {
 impl<B> ModelTrait<B> for CauchyModel<B>
 where B: AutodiffBackend
 {
-    fn pdf(&self, data: &Tensor<B, 1>) -> Tensor<B, 1> {
+    fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1> {
         let v = (self.loc.val() - data.clone()) / self.scale.val();
         let v = v.powi_scalar(2);
         let v = (v + 1.0) * self.scale.val() * PI;
@@ -71,6 +71,7 @@ struct Options {
     lower: Vec<Vec<f64>>,
     num: usize,
     seed: Option<u64>,
+    split: Option<bool>,
 }
 
 /// Convert a parsed Yaml representation to Options for the experiment.
@@ -92,8 +93,10 @@ struct Options {
 ///   - <array of f64, length `dim`>
 /// # number of observations to generate for the experiment; must be greater than 0
 /// num: <int>
-/// # seed to use for the experiment (optional)
+/// # seed to use for the experiment (optional, default local entropy)
 /// seed: <int>
+/// # whether or not to split the sample for nearest neighbours (optional, default false)
+/// split: true
 /// ```
 /// 
 /// # Panics
@@ -122,12 +125,15 @@ fn yaml_to_options(doc: Yaml) -> Options {
         None => None
     };
 
+    let split: Option<bool> = doc["split"].as_bool();
+
     Options {
         dim,
         loc,
         lower,
         num,
         seed,
+        split,
     }
 
 }
@@ -247,18 +253,20 @@ fn main() {
     let model = cauchy_model::<AutoBE>(options.dim, &sample, device);
 
     println!("Starting params");
-    println!("Loc: {:?}", model.loc.val());
-    println!("Scale: {:?}\n", model.lower.val());
-    /*
+    println!("Loc: {:?}", model.loc.val().clone().into_scalar());
+    println!("Scale: {:?}\n", model.lower.val().clone().into_scalar());
+
+    let split: bool = options.split.unwrap_or_default();
+
     let (iters, model) = run::<AutoBE, CauchyModel<AutoBE>>(
         model,
-        vec,
-        options.split,
+        sample,
+        split,
         device,
     );
 
     println!("Final params (iters={})", iters);
     println!("Loc: {}", model.loc.val().clone().into_scalar());
     println!("Scale: {}\n", model.scale.val().clone().into_scalar());
-    */
+
 }

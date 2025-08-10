@@ -1,21 +1,25 @@
 use burn::{
-    module::{AutodiffModule, ModuleVisitor, ParamId},
-    optim::{AdamConfig, GradientsParams, Optimizer},
-    prelude::{Backend, Tensor},
-    tensor::backend::AutodiffBackend,
+    module::{AutodiffModule, ModuleVisitor, ParamId}, optim::{AdamConfig, GradientsParams, Optimizer}, prelude::{Backend, Float, Tensor}, record::Record, tensor::backend::AutodiffBackend
 };
 
 use core::f64;
 use std::f64::consts::PI;
 
-use linfa_nn::{BallTree, distance::L1Dist, NearestNeighbour};
-use ndarray::{Array, array};
+use ball_tree::BallTree;
+pub use ball_tree::Point;
 
 use burn::tensor::ElementConversion;
 
 /// A Burn Module must implement a `pdf` on data function
 pub trait ModelTrait<B: AutodiffBackend>: AutodiffModule<B> {
     fn pdf(&self, data: &Tensor<B, 1>) -> Tensor<B, 1>;
+}
+
+pub struct HellingerOutput<B>
+where
+    B: Backend,
+{
+    pub loss: Tensor<B, 1>,
 }
 
 /// This `forward` function calculates the estimate for
@@ -34,20 +38,23 @@ pub fn forward<B: AutodiffBackend, M: ModelTrait<B>>(
     v.sum() * factor + 1.0
 }
 
-/*
-fn calculate_balls<B: Backend>(data: &Vec<f64>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
+pub struct Vector<B: Backend>(Tensor<B ,1>);
+
+fn calculate_balls<B: Backend>(data: &Vec<Tensor<B,1>>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
 
     // considered that the sample could be split to ensure i.i.d terms in the sum
     // but there were no apparent benefits; leaving this legacy in case need to investigate
     // again
     let num = data.len();
-    let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
-    let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
+    let xx: Vec<f64> = data[0].into_data().to_vec().unwrap();
+    let data: Vec<_> = data.iter().map(|t| t.clone().into_data().as_slice().unwrap()).collect();
+    // let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
+    // let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
 
-    let algo = BallTree::new();
+    let algo = BallTree::new(data, vec![(); data.len()]);
     let arr = Array::from_shape_vec([data1.len(), 1], data1.to_vec()).unwrap();
     let arr = arr.view();
-    let nn_index = algo.from_batch(&arr, L1Dist).unwrap();
+    let nn_index = algo.from_batch(&arr, L2Dist).unwrap();
     let pos_nearest = 1;
 
     let radii: Vec<f64> = data2.iter()
@@ -62,7 +69,7 @@ fn calculate_balls<B: Backend>(data: &Vec<f64>, split: bool, device: &B::Device)
         Tensor::from_data(radii.as_slice(), device)
     )
 }
-*/
+
 
 pub struct TrainingConfig {
     pub num_runs: usize,
@@ -85,79 +92,10 @@ impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
     }
 }
 
-fn create_artifact_dir(artifact_dir: &str) {
-    // Remove existing artifacts before to get an accurate learner summary
-    std::fs::remove_dir_all(artifact_dir).ok();
-    std::fs::create_dir_all(artifact_dir).ok();
-}
-
-/*
-pub fn run<B: AutodiffBackend>(device: B::Device) {
-    create_artifact_dir(ARTIFACT_DIR);
-    // Config
-    let config_optimizer = AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5)));
-    let config = MnistTrainingConfig::new(config_optimizer);
-    B::seed(config.seed);
-
-    let model = Model::<B>::new(&device);
-
-    // Data
-    let batcher = MnistBatcher::default();
-
-    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(MnistDataset::train());
-    let dataloader_test = DataLoaderBuilder::new(batcher)
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(MnistDataset::test());
-
-    // Model
-    let learner = LearnerBuilder::new(ARTIFACT_DIR)
-        .metric_train_numeric(AccuracyMetric::new())
-        .metric_valid_numeric(AccuracyMetric::new())
-        .metric_train_numeric(CpuUse::new())
-        .metric_valid_numeric(CpuUse::new())
-        .metric_train_numeric(CpuMemory::new())
-        .metric_valid_numeric(CpuMemory::new())
-        .metric_train_numeric(CpuTemperature::new())
-        .metric_valid_numeric(CpuTemperature::new())
-        .metric_train_numeric(LossMetric::new())
-        .metric_valid_numeric(LossMetric::new())
-        .with_file_checkpointer(CompactRecorder::new())
-        .early_stopping(MetricEarlyStoppingStrategy::new(
-            &LossMetric::<B>::new(),
-            Aggregate::Mean,
-            Direction::Lowest,
-            Split::Valid,
-            StoppingCondition::NoImprovementSince { n_epochs: 1 },
-        ))
-        .devices(vec![device.clone()])
-        .num_epochs(config.num_epochs)
-        .summary()
-        .build(model, config.optimizer.init(), 1e-4);
-
-    let model_trained = learner.fit(dataloader_train, dataloader_test);
-
-    config
-        .save(format!("{ARTIFACT_DIR}/config.json").as_str())
-        .unwrap();
-
-    model_trained
-        .save_file(
-            format!("{ARTIFACT_DIR}/model"),
-            &NoStdTrainingRecorder::new(),
-        )
-        .expect("Failed to save trained model");
-}
-*/
 
 pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     mut model: M,
-    vec: Vec<f64>,
+    sample: Vec<Tensor<B, 1>>,
     split: bool,
     device: B::Device,
 ) -> (usize, M) {
@@ -168,7 +106,7 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         config_optimizer: AdamConfig::new(),
     };
 
-    let balls = (Tensor::from_data([1.0, 2.0], &device), Tensor::from_data([1.0, 2.0], &device)); // calculate_balls::<B>(&vec, split, &device);
+    let balls = calculate_balls::<B>(&sample, split, &device);
 
     let mut optimizer = config.config_optimizer.init::<B, M>();
     let epsilon: f64 = 0.000001;
