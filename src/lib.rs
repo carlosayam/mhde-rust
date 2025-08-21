@@ -1,9 +1,9 @@
 use burn::{
-    module::{AutodiffModule, ModuleVisitor, ParamId}, optim::{AdamConfig, GradientsParams, Optimizer}, prelude::{Backend, Float, Tensor}, record::Record, tensor::backend::AutodiffBackend
+    module::{AutodiffModule, ModuleVisitor, ParamId}, optim::{AdamConfig, GradientsParams, Optimizer}, prelude::{Backend, Float, Tensor}, record::Record, tensor::{backend::AutodiffBackend, cast::ToElement}
 };
 
 use core::f64;
-use std::f64::consts::PI;
+use std::{f64::consts::PI, iter::zip};
 
 use ball_tree::BallTree;
 pub use ball_tree::Point;
@@ -38,20 +38,49 @@ pub fn forward<B: AutodiffBackend, M: ModelTrait<B>>(
     v.sum() * factor + 1.0
 }
 
+
+/// wrapper type for Tensor<B,1> so we can implement Point interface
 pub struct Vector<B: Backend>(Tensor<B ,1>);
 
-fn calculate_balls<B: Backend>(data: &Vec<Tensor<B,1>>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
+impl<B: Backend> Clone for Vector<B> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<B: Backend> PartialEq for Vector<B> {
+    fn eq(&self, other: &Self) -> bool {
+        for (e1, e2) in zip(self.0.clone().iter_dim(0), other.0.clone().iter_dim(0)) {
+            if e1.into_scalar().to_f64() != e2.into_scalar().to_f64() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<B: Backend> Point for Vector<B> {
+    fn distance(&self, other: &Self) -> f64 {
+        (self.0.clone() - other.0.clone()).powi_scalar(2).sum().into_scalar().to_f64().sqrt()
+    }
+
+    fn move_towards(&self, other: &Self, d: f64) -> Self {
+        Self(self.0.clone() + (self.0.clone() - other.0.clone()) * d)
+    }
+}
+
+fn calculate_balls<B: Backend>(data: &Vec<Vector<B>>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
 
     // considered that the sample could be split to ensure i.i.d terms in the sum
     // but there were no apparent benefits; leaving this legacy in case need to investigate
     // again
     let num = data.len();
-    let xx: Vec<f64> = data[0].into_data().to_vec().unwrap();
-    let data: Vec<_> = data.iter().map(|t| t.clone().into_data().as_slice().unwrap()).collect();
-    // let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
-    // let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
+    // let xx: Vec<f64> = data[0].into_data().to_vec().unwrap();
+    // let data: Vec<_> = data.iter().map(|t| t.clone().into_data().as_slice().unwrap()).collect();
+    let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
+    let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
 
-    let algo = BallTree::new(data, vec![(); data.len()]);
+    let algo = BallTree::new(data1.to_vec(), std::iter::repeat(()).take(num).collect());
     let arr = Array::from_shape_vec([data1.len(), 1], data1.to_vec()).unwrap();
     let arr = arr.view();
     let nn_index = algo.from_batch(&arr, L2Dist).unwrap();
