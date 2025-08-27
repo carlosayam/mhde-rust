@@ -12,7 +12,7 @@ use burn::tensor::ElementConversion;
 
 /// A Burn Module must implement a `pdf` on data function
 pub trait ModelTrait<B: AutodiffBackend>: AutodiffModule<B> {
-    fn pdf(&self, data: &Tensor<B, 1>) -> Tensor<B, 1>;
+    fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1>;
 }
 
 pub struct HellingerOutput<B>
@@ -27,7 +27,7 @@ where
 /// the volume balls do not depend on the parameters of the model.
 pub fn forward<B: AutodiffBackend, M: ModelTrait<B>>(
     model: &M,
-    data: &Tensor<B, 1>,
+    data: &Tensor<B, 2>,
     balls: &Tensor<B, 1>
 ) -> Tensor<B, 1> {
     let pdf = model.pdf(data);
@@ -41,6 +41,12 @@ pub fn forward<B: AutodiffBackend, M: ModelTrait<B>>(
 
 /// wrapper type for Tensor<B,1> so we can implement Point interface
 pub struct Vector<B: Backend>(Tensor<B ,1>);
+
+impl<B: Backend> Vector<B> {
+    fn dim(&self) -> usize {
+        self.0.dims()[0]
+    }
+}
 
 impl<B: Backend> Clone for Vector<B> {
     fn clone(&self) -> Self {
@@ -69,32 +75,37 @@ impl<B: Backend> Point for Vector<B> {
     }
 }
 
-fn calculate_balls<B: Backend>(data: &Vec<Vector<B>>, split: bool, device: &B::Device) -> (Tensor<B, 1>, Tensor<B, 1>) {
+fn volume_dim(dim: usize, radius: f64) -> f64 {
+    match dim {
+        1 => 2.0 * radius,
+        2 => PI * radius * radius,
+        3 => PI * radius * radius * radius * 4.0 / 3.0,
+        4 => PI * PI * radius * radius * radius * radius / 2.0,
+        _ => panic!("wrong dimension")
+    }
+}
+
+fn calculate_balls<B: Backend>(data: &Vec<Vector<B>>, split: bool, device: &B::Device) -> (Tensor<B, 2>, Tensor<B, 1>) {
 
     // considered that the sample could be split to ensure i.i.d terms in the sum
     // but there were no apparent benefits; leaving this legacy in case need to investigate
     // again
     let num = data.len();
-    // let xx: Vec<f64> = data[0].into_data().to_vec().unwrap();
-    // let data: Vec<_> = data.iter().map(|t| t.clone().into_data().as_slice().unwrap()).collect();
+    let dim = data[0].dim();
     let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
     let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
 
     let algo = BallTree::new(data1.to_vec(), std::iter::repeat(()).take(num).collect());
-    let arr = Array::from_shape_vec([data1.len(), 1], data1.to_vec()).unwrap();
-    let arr = arr.view();
-    let nn_index = algo.from_batch(&arr, L2Dist).unwrap();
-    let pos_nearest = 1;
+    let mut query = algo.query();
+    let nearest = if split { 1 } else { 2 };
 
     let radii: Vec<f64> = data2.iter()
-        .map(|pt: &f64| (nn_index.k_nearest((array![*pt]).view(), pos_nearest + 1).unwrap(), pt))
-        .map(|resp: (Vec<(ndarray::ArrayBase<ndarray::ViewRepr<&f64>, ndarray::Dim<[usize; 1]>>, usize)>, &f64)|
-                    (resp.1 - resp.0[pos_nearest].0[0]).abs())  // distance to nearest neighbour
-        .map(|v: f64| v * 2.0)                        // ball volume in dimension 1
+        .map(|pt: &Vector<B>| query.nn(pt).take(nearest).last())
+        .map(|nn_result| volume_dim(dim, nn_result.unwrap().1))
         .collect();
 
     (
-        Tensor::from_data(data2, device),
+        Tensor::stack(data2.iter().map(|pt: &Vector<B>| pt.0.clone()).collect(), 0),
         Tensor::from_data(radii.as_slice(), device)
     )
 }
@@ -135,7 +146,9 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         config_optimizer: AdamConfig::new(),
     };
 
-    let balls = calculate_balls::<B>(&sample, split, &device);
+    let sample_wrapped: Vec<Vector<B>> = sample.iter().map(|tensor: &Tensor<B, 1>| Vector(tensor.clone())).collect();
+
+    let (data, balls) = calculate_balls::<B>(&sample_wrapped, split, &device);
 
     let mut optimizer = config.config_optimizer.init::<B, M>();
     let epsilon: f64 = 0.000001;
@@ -143,7 +156,7 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     let mut ix = 1;
     while ix <= config.num_runs {
 
-        let hd = forward(&model, &balls.0, &balls.1);
+        let hd = forward(&model, &data, &balls);
 
         let grads = hd.backward();
 
