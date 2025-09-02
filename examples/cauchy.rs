@@ -18,7 +18,7 @@ use burn::{
         Module,
         Param
     }, prelude::{
-        Backend, Tensor
+        Backend, Tensor, Shape, TensorData
     }, tensor::backend::AutodiffBackend,
 };
 use argparse::{ArgumentParser, Store, Print};
@@ -39,22 +39,60 @@ pub struct CauchyModel<B: Backend> {
     dim: usize,
     // location for the multi-variate distribution
     loc: Param<Tensor<B, 1>>,
-    // Cholesky decomposition, as a flat parameter of length dim (dim + 1) / 2.
+    // diagonal entries to be squared
+    diagonal: Param<Tensor<B, 1>>,
+    // Cholesky decomposition, as a flat parameter of length dim (dim - 1) / 2.
     lower: Param<Tensor<B, 1>>,
 }
 
-/* 
+impl<B: Backend> CauchyModel<B> {
+    fn _matrix(&self) -> Tensor<B, 2> {
+        let device = self.loc.device();
+        let mut flat = Tensor::<B, 1>::zeros([self.dim * self.dim], &device);
+
+        // diagonal squared, so these are positive entries
+        let diagonal2 = self.diagonal.clone().val() * self.diagonal.val();
+        // fill diagonal
+        let mut pos = 0;
+        for ix in 0..self.dim {
+            flat = flat.slice_assign([pos..pos+1], diagonal2.clone().slice([ix..ix+1]));
+            pos = pos + self.dim + 1;
+        }
+
+        // fill lower triangular part
+        let mut len = 1;
+        pos = 0;
+        for ix in 1..self.dim {
+            flat = flat.slice_assign([ix * self.dim .. ix * self.dim + len], self.lower.clone().val().slice([pos .. pos + len]));
+            pos = pos + len;
+            len = len + 1;
+        }
+
+        // finalise by turning into matrix and doing L L^T
+        let matrix = flat.reshape([self.dim, self.dim]);
+        let matrix_t = matrix.clone().transpose();
+        let cov_matrix = matrix.matmul(matrix_t);
+
+        cov_matrix
+    }
+}
+
 impl<B> ModelTrait<B> for CauchyModel<B>
 where B: AutodiffBackend
 {
     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1> {
-        let v = (self.loc.val() - data.clone()) / self.scale.val();
+        let matrix = self._matrix();
+        let v = matrix.matmul(data.clone() - self.loc.val().clone().unsqueeze::<2>());
         let v = v.powi_scalar(2);
-        let v = (v + 1.0) * self.scale.val() * PI;
-        v.powi_scalar(-1)
+        let v = (v + 1.0) * PI;
+        let v = v.powi_scalar(-1);
+        let v = v.prod_dim(1).squeeze(0);
+        v
     }
+
 }
 
+/*
 #[derive(Clone, Debug, Default)]
 struct CauchyBatcher {}
 
@@ -224,7 +262,7 @@ fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::De
 
     // use min and max to estimate a simple scale, and populate just the diagonal for the initial
     // Cholesky decomposition
-    let lower_size = dim * (dim + 1) / 2;
+    let lower_size = dim * (dim - 1) / 2;
     let scale = (v_max - v_min) / (sample.len() as f64);
     let lower: Tensor<B, 1> = {
         let mut res = Array::zeros((lower_size,));
@@ -239,6 +277,7 @@ fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::De
     CauchyModel {
         dim: dim,
         loc: Param::from_tensor(loc),
+        diagonal: Param::from_tensor(Tensor::ones(Shape::new([dim]), &device)),
         lower: Param::from_tensor(lower),
     }
 }
@@ -251,6 +290,7 @@ fn main() {
     let device: <AutoBE as Backend>::Device = Default::default();
     let sample = generate_sample(&options);
     let model = cauchy_model::<AutoBE>(options.dim, &sample, device);
+    let sample = sample.iter().map(|row| Tensor::from_data(TensorData::new(row.clone().into_raw_vec(), [model.dim]), &device)).collect();
 
     println!("Starting params");
     println!("Loc: {:?}", model.loc.val().clone().into_scalar());
@@ -266,7 +306,5 @@ fn main() {
     );
 
     println!("Final params (iters={})", iters);
-    println!("Loc: {}", model.loc.val().clone().into_scalar());
-    println!("Scale: {}\n", model.scale.val().clone().into_scalar());
-
+    println!("{:}", model);
 }

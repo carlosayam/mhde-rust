@@ -11,7 +11,7 @@ use burn::{
         ParamId,
     }, prelude::{
         Backend, Tensor
-    }, tensor::{backend::AutodiffBackend, TensorData},
+    }, tensor::{backend::AutodiffBackend, TensorData, BroadcastArgs},
 };
 use argparse::{ArgumentParser, Store, StoreOption, StoreTrue};
 
@@ -27,13 +27,13 @@ use ndarray::{array, Array1, Array2};
 /// A Cauchy+Normal 3D distribution, defined using location in 3D and
 /// the Cholesky decomposition for the covariance matrix
 #[derive(Module, Debug)]
-pub struct CauchyModel3d<B: Backend> {
+pub struct CauchyModel<B: Backend> {
     loc: Param<Tensor<B, 1>>,
     diagonal: Param<Tensor<B, 1>>,
     lower: Param<Tensor<B, 1>>,
 }
 
-// impl<B> ModelTrait<B> for CauchyModel2d<B>
+// impl<B> ModelTrait<B> for CauchyModel<B>
 // where B: AutodiffBackend
 // {
 //     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1> {
@@ -140,6 +140,22 @@ type AutoBE = Autodiff<NdArray<f64, i64>>;
 
 fn main() {
     let device: <AutoBE as Backend>::Device = Default::default();
+    let data: Tensor<AutoBE, 2> = Tensor::from_data([
+        [1.0, 0.0, 0.0],
+        [0.0, 2.0, 0.0],
+        [0.0, 0.0, 3.0],
+        [1.0, 2.0, 3.0]
+    ], &device);
+    let loc: Tensor<AutoBE, 1> = Tensor::from_data([-1.0, -3.0, 0.0], &device);
+
+    let works = data.clone() + loc.clone().unsqueeze::<2>();
+
+    println!("works = {:} +\n {:} = \n {:}", data, loc, works);
+
+}
+
+fn main1() {
+    let device: <AutoBE as Backend>::Device = Default::default();
     let dim = 3;
     let options = Options {
         num: 10,
@@ -149,7 +165,7 @@ fn main() {
     let raw_data = generate(&options);
 }
 
-fn main_() {
+fn main2() {
     let device: <AutoBE as Backend>::Device = Default::default();
 
     let dim = 3;
