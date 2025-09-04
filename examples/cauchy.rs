@@ -82,11 +82,12 @@ where B: AutodiffBackend
 {
     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1> {
         let matrix = self._matrix();
-        let v = matrix.matmul(data.clone() - self.loc.val().clone().unsqueeze::<2>());
+        let data = data.clone() - self.loc.val().clone().unsqueeze::<2>();
+        let v = data.matmul(matrix);
         let v = v.powi_scalar(2);
         let v = (v + 1.0) * PI;
         let v = v.powi_scalar(-1);
-        let v = v.prod_dim(1).squeeze(0);
+        let v = v.prod_dim(1).squeeze::<1>(1);
         v
     }
 
@@ -267,7 +268,7 @@ fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::De
     let lower: Tensor<B, 1> = {
         let mut res = Array::zeros((lower_size,));
         let mut px = 0;
-        for ix in 0..dim {
+        for ix in 0..dim-1 {
             res[px] = scale;
             px += ix + 2;
         }
@@ -293,8 +294,8 @@ fn main() {
     let sample = sample.iter().map(|row| Tensor::from_data(TensorData::new(row.clone().into_raw_vec(), [model.dim]), &device)).collect();
 
     println!("Starting params");
-    println!("Loc: {:?}", model.loc.val().clone().into_scalar());
-    println!("Scale: {:?}\n", model.lower.val().clone().into_scalar());
+    println!("Loc: {:?}", model.loc.val().clone());
+    println!("Matrix: {:?}\n", model._matrix());
 
     let split: bool = options.split.unwrap_or_default();
 
@@ -306,5 +307,6 @@ fn main() {
     );
 
     println!("Final params (iters={})", iters);
-    println!("{:}", model);
+    println!("Loc: {:?}", model.loc.val().clone());
+    println!("Matrix: {:?}\n", model._matrix());
 }
