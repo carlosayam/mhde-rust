@@ -19,7 +19,7 @@ use burn::{
         Param
     }, prelude::{
         Backend, Tensor, Shape, TensorData
-    }, tensor::backend::AutodiffBackend,
+    }, tensor::{backend::AutodiffBackend, check_closeness},
 };
 use argparse::{ArgumentParser, Store, Print};
 
@@ -309,4 +309,27 @@ fn main() {
     println!("Final params (iters={})", iters);
     println!("Loc: {:?}", model.loc.val().clone());
     println!("Matrix: {:?}\n", model._matrix());
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_matrix_2() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+        let model: CauchyModel<AutoBE> = CauchyModel {
+            dim: 2,
+            loc: Param::from_tensor(Tensor::from_floats([1.0, 2.0], &device)),
+            diagonal: Param::from_tensor(Tensor::ones(Shape::new([2]), &device)),
+            lower: Param::from_tensor(Tensor::from_floats([-1.0], &device)),
+        };
+        let matrix = model._matrix();
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, 2.0, -2.0, 1.0], &device).reshape([2, 2]);
+        println!("matrix\n{:?}", &matrix);
+        // assert_eq!(matrix.into_data(), exp_matrix.into_data());
+        assert!(false);
+    }
+
 }
