@@ -129,10 +129,7 @@ impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
             let grads = tensor.grad(&self.grads).unwrap();
             for (_i, tensor) in grads.iter_dim(0).enumerate() {
                 let val: f64 = tensor.into_scalar().elem();
-                self.is_less = val.abs() < self.epsilon;
-                if !self.is_less {
-                    break;
-                }
+                self.is_less = self.is_less && val.abs() < self.epsilon;
             }
         }
     }
