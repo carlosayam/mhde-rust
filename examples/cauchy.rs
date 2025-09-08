@@ -19,7 +19,7 @@ use burn::{
         Param
     }, prelude::{
         Backend, Tensor, Shape, TensorData
-    }, tensor::{backend::AutodiffBackend, check_closeness},
+    }, tensor::{backend::AutodiffBackend},
 };
 use argparse::{ArgumentParser, Store, Print};
 
@@ -314,7 +314,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
 
+    use burn::tensor::{ElementConversion, Float};
+
     use super::*;
+
+    fn check_close<B: Backend, const D: usize>(a: Tensor<B, D, Float>, b: Tensor<B, D, Float>) {
+        let resp = (a.clone() - b.clone()).max_abs();
+        let msg = format!("Tensors differ:\n{:?}\n{:?}\n", a, b);
+        assert!(resp.into_scalar().elem::<f64>() < 1E-10, "{}", msg);
+    }
 
     #[test]
     fn test_matrix_2() {
@@ -326,10 +334,22 @@ mod tests {
             lower: Param::from_tensor(Tensor::from_floats([-1.0], &device)),
         };
         let matrix = model._matrix();
-        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, 2.0, -2.0, 1.0], &device).reshape([2, 2]);
-        println!("matrix\n{:?}", &matrix);
-        // assert_eq!(matrix.into_data(), exp_matrix.into_data());
-        assert!(false);
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, -1.0, -1.0, 2.0], &device).reshape([2, 2]);
+        check_close(matrix, exp_matrix);
+    }
+
+    #[test]
+    fn test_matrix_3() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+        let model: CauchyModel<AutoBE> = CauchyModel {
+            dim: 3,
+            loc: Param::from_tensor(Tensor::from_floats([1.0, 2.0, 0.0], &device)),
+            diagonal: Param::from_tensor(Tensor::from_floats([2.0, 0.3, 0.5], &device)),
+            lower: Param::from_tensor(Tensor::from_floats([-1.0, -2.0, 4.0], &device)),
+        };
+        let matrix = model._matrix();
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([4., -2., -4., -2., 1.09, 3.2, -4., 3.2, 20.25], &device).reshape([3, 3]);
+        check_close(matrix, exp_matrix);
     }
 
 }
