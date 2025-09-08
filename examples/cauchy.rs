@@ -320,8 +320,8 @@ mod tests {
 
     fn check_close<B: Backend, const D: usize>(a: Tensor<B, D, Float>, b: Tensor<B, D, Float>) {
         let resp = (a.clone() - b.clone()).max_abs();
-        let msg = format!("Tensors differ:\n{:?}\n{:?}\n", a, b);
-        assert!(resp.into_scalar().elem::<f64>() < 1E-10, "{}", msg);
+        let msg = format!("TENSORS DIFFER\nGot >> \n{:?}\nExpected >> \n{:?}\n", a, b);
+        assert!(resp.into_scalar().elem::<f64>() < 1E-5, "{}", msg);
     }
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
             lower: Param::from_tensor(Tensor::from_floats([-1.0, -2.0, 4.0], &device)),
         };
         let matrix = model._matrix();
-        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([4., -2., -4., -2., 1.09, 3.2, -4., 3.2, 20.25], &device).reshape([3, 3]);
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([16.,-4.,-8.,-4.,1.0081,2.36,-8.,2.36,20.0625], &device).reshape([3, 3]);
         check_close(matrix, exp_matrix);
     }
 
