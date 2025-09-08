@@ -39,7 +39,7 @@ pub struct CauchyModel<B: Backend> {
     dim: usize,
     // location for the multi-variate distribution
     loc: Param<Tensor<B, 1>>,
-    // diagonal entries to be squared
+    // diagonal entries to be squared (so, their square roots)
     diagonal: Param<Tensor<B, 1>>,
     // Cholesky decomposition, as a flat parameter of length dim (dim - 1) / 2.
     lower: Param<Tensor<B, 1>>,
