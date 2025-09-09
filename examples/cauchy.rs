@@ -28,7 +28,7 @@ use rand_core::SeedableRng;
 
 use rand::distributions::Distribution;
 use statrs::distribution::Cauchy;
-use std::{f64::consts::PI, str::FromStr};
+use std::{f64::consts::PI};
 
 /// Parameters for Cauchy-distributed data in dim dimensions,
 /// defined using location in R^{dim} and the Cholesky decomposition
@@ -41,7 +41,7 @@ pub struct CauchyModel<B: Backend> {
     loc: Param<Tensor<B, 1>>,
     // diagonal entries to be squared (so, their square roots)
     diagonal: Param<Tensor<B, 1>>,
-    // Cholesky decomposition, as a flat parameter of length dim (dim - 1) / 2.
+    // Cholesky decomposition, as a flat parameter of length dim * (dim - 1) / 2.
     lower: Param<Tensor<B, 1>>,
 }
 

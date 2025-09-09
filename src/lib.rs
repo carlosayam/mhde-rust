@@ -75,13 +75,13 @@ impl<B: Backend> Point for Vector<B> {
     }
 }
 
+/// Calculate volume of n-ball of dimension `dim`.
+/// This can be calculated as per recursive formula in the implementation.
 fn volume_dim(dim: usize, radius: f64) -> f64 {
     match dim {
+        0 => 1.0,
         1 => 2.0 * radius,
-        2 => PI * radius * radius,
-        3 => PI * radius * radius * radius * 4.0 / 3.0,
-        4 => PI * PI * radius * radius * radius * radius / 2.0,
-        _ => panic!("wrong dimension")
+        _ => 2.0 * PI * radius * radius / (dim as f64) * volume_dim(dim - 2, radius)
     }
 }
 
@@ -188,4 +188,27 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         ix += 1;
     }
     (ix, model)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_volume_dim() {
+        for (dim, rx) in zip(1..5, 2..6) {
+            let radius = rx as f64;
+            let vol = volume_dim(dim, radius);
+            let exp_vol: f64 = match dim {
+                1 => 2.0 * radius,
+                2 => PI * radius * radius,
+                3 => PI * radius * radius * radius * 4.0 / 3.0,
+                4 => PI * PI * radius * radius * radius * radius / 2.0,
+                _ => panic!("wrong dimension")
+            };
+            assert!((vol - exp_vol).abs() < 1E-5, "Failed at dimension {:}: got {:}, expected {:}", dim, vol, exp_vol);
+        }
+
+    }
 }
