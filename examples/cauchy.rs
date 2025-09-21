@@ -31,8 +31,9 @@ use statrs::distribution::Cauchy;
 use std::{f64::consts::PI};
 
 /// Parameters for Cauchy-distributed data in dim dimensions,
-/// defined using location in R^{dim} and the Cholesky decomposition
-/// for the covariance matrix
+/// defined using location in R^{dim} and the lower triangular
+/// inverse matrix with positive entries for the diagonal
+/// and arbitrary values for the below-diagonal components
 #[derive(Module, Debug)]
 pub struct CauchyModel<B: Backend> {
     // space dimension
@@ -41,12 +42,15 @@ pub struct CauchyModel<B: Backend> {
     loc: Param<Tensor<B, 1>>,
     // diagonal entries to be squared (so, their square roots)
     diagonal: Param<Tensor<B, 1>>,
-    // Cholesky decomposition, as a flat parameter of length dim * (dim - 1) / 2.
+    // below diagonal entries of length dim * (dim - 1) / 2.
     lower: Param<Tensor<B, 1>>,
 }
 
 impl<B: Backend> CauchyModel<B> {
-    fn _matrix(&self) -> Tensor<B, 2> {
+
+    /// Calculates the matrix associated with the diagonal and lower parameters,
+    /// and the factor to adjust the PDF (product of the diagonal entries)
+    fn matrix_and_factor(&self) -> (Tensor<B, 2>, Tensor<B, 1>) {
         let device = self.loc.device();
         let mut flat = Tensor::<B, 1>::zeros([self.dim * self.dim], &device);
 
@@ -59,6 +63,8 @@ impl<B: Backend> CauchyModel<B> {
             pos = pos + self.dim + 1;
         }
 
+        let factor: Tensor<B, 1> = diagonal2.prod();
+
         // fill lower triangular part
         let mut len = 1;
         pos = 0;
@@ -68,12 +74,10 @@ impl<B: Backend> CauchyModel<B> {
             len = len + 1;
         }
 
-        // finalise by turning into matrix and doing L L^T
+        // finalise by turning into matrix
         let matrix = flat.reshape([self.dim, self.dim]);
-        let matrix_t = matrix.clone().transpose();
-        let cov_matrix = matrix.matmul(matrix_t);
 
-        cov_matrix
+        (matrix, factor)
     }
 }
 
@@ -81,27 +85,16 @@ impl<B> ModelTrait<B> for CauchyModel<B>
 where B: AutodiffBackend
 {
     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1> {
-        let matrix = self._matrix();
+        let (matrix, factor) = self.matrix_and_factor();
         let data = data.clone() - self.loc.val().clone().unsqueeze::<2>();
-        let v = data.matmul(matrix);
+        let v = matrix.matmul(data.transpose()).transpose();
         let v = v.powi_scalar(2);
         let v = (v + 1.0) * PI;
         let v = v.powi_scalar(-1);
         let v = v.prod_dim(1).squeeze::<1>(1);
-        v
+        v * factor
     }
-
 }
-
-/*
-#[derive(Clone, Debug, Default)]
-struct CauchyBatcher {}
-
-#[derive(Clone, Debug)]
-pub struct CauchyBatch<B: Backend> {
-    pub data: Tensor<B, 2>,
-}
-*/
 
 #[derive(Debug)]
 struct Options {
@@ -122,7 +115,7 @@ struct Options {
 /// dim: <int>
 /// # location for Cauchy-distributed data; it must have `dim` number of items
 /// loc: <array of f64>
-/// # covariance matrix, specified as a lower triangular matrix; it is a series
+/// # lower triangular matrix to transform the initial R^{dim} points; it is a series
 /// # of arrays with increasing number of elements, starting with one f64 number and
 /// # ending with an array of `dim` f64 numbers
 /// lower:
@@ -201,7 +194,9 @@ fn get_options() -> Options {
     yaml_to_options(docs[0].clone())
 }
 
-/// Generates a multivariate Cauchy-distributed sample based on configuration given in Options 
+/// Generates a multivariate Cauchy-distributed sample based on configuration given in Options
+/// Generates (X_1, X_2, ... , X_d) as individual samples from a Cauchy distribution
+/// and then transforms using matrix L location P into L X + P. 
 fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
     let mut rng: ChaCha8Rng = match options.seed {
         Some(val) => ChaCha8Rng::seed_from_u64(val),
@@ -249,8 +244,8 @@ fn min_median_max(numbers: &Vec<f64>) -> (f64, f64, f64) {
     (to_sort[0], med, to_sort[numbers.len()-1])
 }
 
-/// Given the sample, provide an initial CauchyModel with sensible initial location and lower
-/// triangular matrix.
+/// Given the sample, provide an initial CauchyModel with sensible initial location and diagonal
+/// matrix as starting point for the inverse.
 fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::Device) -> CauchyModel<B> {
 
     // flatten the data to obtain min, max and median
@@ -295,7 +290,7 @@ fn main() {
 
     println!("Starting params");
     println!("Loc: {:?}", model.loc.val().clone());
-    println!("Matrix: {:?}\n", model._matrix());
+    println!("Matrix: {:?}\n", model.matrix_and_factor());
 
     let split: bool = options.split.unwrap_or_default();
 
@@ -308,7 +303,7 @@ fn main() {
 
     println!("Final params (iters={})", iters);
     println!("Loc: {:?}", model.loc.val().clone());
-    println!("Matrix: {:?}\n", model._matrix());
+    println!("Matrix: {:?}\n", model.matrix_and_factor());
 }
 
 #[cfg(test)]
@@ -325,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_2() {
+    fn test_matrix_2a() {
         let device: <AutoBE as Backend>::Device = Default::default();
         let model: CauchyModel<AutoBE> = CauchyModel {
             dim: 2,
@@ -333,9 +328,25 @@ mod tests {
             diagonal: Param::from_tensor(Tensor::ones(Shape::new([2]), &device)),
             lower: Param::from_tensor(Tensor::from_floats([-1.0], &device)),
         };
-        let matrix = model._matrix();
-        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, -1.0, -1.0, 2.0], &device).reshape([2, 2]);
+        let (matrix, _factor) = model.matrix_and_factor();
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, 0.0, -1.0, 1.0], &device).reshape([2, 2]);
         check_close(matrix, exp_matrix);
+    }
+
+    #[test]
+    fn test_matrix_2b() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+        let model: CauchyModel<AutoBE> = CauchyModel {
+            dim: 2,
+            loc: Param::from_tensor(Tensor::from_floats([1.0, 2.0], &device)),
+            diagonal: Param::from_tensor(Tensor::from_floats([1.0, (2.0f64).sqrt()], &device)),
+            lower: Param::from_tensor(Tensor::from_floats([0.0], &device)),
+        };
+        let (matrix, factor) = model.matrix_and_factor();
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([1.0, 0.0, 0.0, 2.0], &device).reshape([2, 2]);
+        check_close(matrix, exp_matrix);
+        let exp_factor: Tensor<AutoBE, 1> = Tensor::<AutoBE, 1>::from_floats([2.0], &device);
+        check_close(factor, exp_factor);
     }
 
     #[test]
@@ -347,9 +358,41 @@ mod tests {
             diagonal: Param::from_tensor(Tensor::from_floats([2.0, 0.3, 0.5], &device)),
             lower: Param::from_tensor(Tensor::from_floats([-1.0, -2.0, 4.0], &device)),
         };
-        let matrix = model._matrix();
-        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([16.,-4.,-8.,-4.,1.0081,2.36,-8.,2.36,20.0625], &device).reshape([3, 3]);
+        let (matrix, factor) = model.matrix_and_factor();
+        let exp_matrix: Tensor<AutoBE, 2> = Tensor::<AutoBE, 1>::from_floats([4.0,0.0,0.0,-1.0,0.09,0.0,-2.0,4.0,0.25], &device).reshape([3, 3]);
         check_close(matrix, exp_matrix);
+        let exp_factor: Tensor<AutoBE, 1> = Tensor::<AutoBE, 1>::from_floats([4.0 * 0.09 * 0.25], &device);
+        check_close(factor, exp_factor);
+    }
+
+    #[test]
+    fn test_cauchy_pdf_1() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+        let model: CauchyModel<AutoBE> = CauchyModel {
+            dim: 1,
+            loc: Param::from_tensor(Tensor::from_floats([0.0], &device)),
+            diagonal: Param::from_tensor(Tensor::from_floats([1.0], &device)),
+            lower: Param::from_tensor(Tensor::from_floats([0.0; 0], &device)),
+        };
+        let data: Tensor<AutoBE, 2> = Tensor::from_data([[0.0], [1.0]], &device);
+        let vals = model.pdf(&data);
+        let exp_vals: Tensor<AutoBE, 1> = Tensor::from_data([0.31831, 0.159155], &device);
+        check_close(vals, exp_vals);
+    }
+
+    #[test]
+    fn test_cauchy_pdf_2() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+        let model: CauchyModel<AutoBE> = CauchyModel {
+            dim: 2,
+            loc: Param::from_tensor(Tensor::from_floats([0.0, 1.0], &device)),
+            diagonal: Param::from_tensor(Tensor::from_floats([1.0, (2.0f64).sqrt()], &device)),
+            lower: Param::from_tensor(Tensor::from_floats([-1.0], &device)),
+        };
+        let data: Tensor<AutoBE, 2> = Tensor::from_data([[0.0, 0.0], [1.0, 1.5], [0.0, 1.0]], &device);
+        let vals = model.pdf(&data);
+        let exp_vals: Tensor<AutoBE, 1> = Tensor::from_data([0.0405285,0.101321,0.202642], &device);
+        check_close(vals, exp_vals);
     }
 
 }

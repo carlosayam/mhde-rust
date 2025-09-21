@@ -75,8 +75,15 @@ impl<B: Backend> Point for Vector<B> {
     }
 }
 
-/// Calculate volume of n-ball of dimension `dim`.
-/// This can be calculated as per recursive formula in the implementation.
+/// Calculate volume of n-ball of dimension `dim`
+/// using the recursive formula
+/// $$
+/// V_n(R) = \begin{cases}
+/// 1 &\text{if } n=0,\\[0.5ex]
+/// 2R &\text{if } n=1,\\[0.5ex]
+/// \dfrac{2\pi}{n}R^2 \times V_{n-2}(R) &\text{otherwise}.
+/// \end{cases}
+/// $$
 fn volume_dim(dim: usize, radius: f64) -> f64 {
     match dim {
         0 => 1.0,
