@@ -12,6 +12,7 @@ use burn::tensor::ElementConversion;
 
 /// A Burn Module must implement a `pdf` on data function
 pub trait ModelTrait<B: AutodiffBackend>: AutodiffModule<B> {
+    /// Calculates the PDF for the given $R^d$ data
     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1>;
 }
 

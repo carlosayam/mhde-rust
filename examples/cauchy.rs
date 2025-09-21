@@ -31,16 +31,17 @@ use statrs::distribution::Cauchy;
 use std::{f64::consts::PI};
 
 /// Parameters for Cauchy-distributed data in dim dimensions,
-/// defined using location in R^{dim} and the lower triangular
-/// inverse matrix with positive entries for the diagonal
-/// and arbitrary values for the below-diagonal components
+/// defined using location in $R^{dim}$ and the lower triangular
+/// inverse matrix with positive entries for the diagonal (specified
+/// with arbitrary values to be squared so the diagonal becomes positive),
+/// and arbitrary values for the below-diagonal components.
 #[derive(Module, Debug)]
 pub struct CauchyModel<B: Backend> {
     // space dimension
     dim: usize,
     // location for the multi-variate distribution
     loc: Param<Tensor<B, 1>>,
-    // diagonal entries to be squared (so, their square roots)
+    // diagonal entries to be squared (technically, their square roots)
     diagonal: Param<Tensor<B, 1>>,
     // below diagonal entries of length dim * (dim - 1) / 2.
     lower: Param<Tensor<B, 1>>,
@@ -49,7 +50,7 @@ pub struct CauchyModel<B: Backend> {
 impl<B: Backend> CauchyModel<B> {
 
     /// Calculates the matrix associated with the diagonal and lower parameters,
-    /// and the factor to adjust the PDF (product of the diagonal entries)
+    /// and the factor to adjust the PDF (product of the positive diagonal entries)
     fn matrix_and_factor(&self) -> (Tensor<B, 2>, Tensor<B, 1>) {
         let device = self.loc.device();
         let mut flat = Tensor::<B, 1>::zeros([self.dim * self.dim], &device);
@@ -117,7 +118,7 @@ struct Options {
 /// loc: <array of f64>
 /// # lower triangular matrix to transform the initial R^{dim} points; it is a series
 /// # of arrays with increasing number of elements, starting with one f64 number and
-/// # ending with an array of `dim` f64 numbers
+/// # ending with an array of `dim` f64 numbers. The diagonal entries must be positive.
 /// lower:
 ///   - <array of f64, length 1>
 ///   - <array of f64, length 2>
@@ -195,8 +196,10 @@ fn get_options() -> Options {
 }
 
 /// Generates a multivariate Cauchy-distributed sample based on configuration given in Options
-/// Generates (X_1, X_2, ... , X_d) as individual samples from a Cauchy distribution
-/// and then transforms using matrix L location P into L X + P. 
+/// Generates `num` observations $X = (x_1, x_2, ... , x_d)$ where each coordinate is sampled
+/// from a standard Cauchy distribution. Then the observations $X_i$ are transformed
+/// according to $M X_i + b$ where $M$ is the `lower` triangular matrix and $b$ is the `loc`
+/// offset.
 fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
     let mut rng: ChaCha8Rng = match options.seed {
         Some(val) => ChaCha8Rng::seed_from_u64(val),
@@ -230,6 +233,7 @@ fn generate_sample(options: &Options) -> Vec<Array1<f64>> {
 }
 
 /// Calculate simple statistics from flat Vec, i.e. minimum, median and maximum
+/// to have a relative good guess for the initial parameter values
 fn min_median_max(numbers: &Vec<f64>) -> (f64, f64, f64) {
 
     let mut to_sort = numbers.clone();
@@ -257,23 +261,15 @@ fn cauchy_model<B: Backend>(dim: usize, sample: &Vec<Array1<f64>>, device: B::De
     let loc: Tensor<B, 1> = Tensor::from_data(loc.as_slice(), &device);
 
     // use min and max to estimate a simple scale, and populate just the diagonal for the initial
-    // Cholesky decomposition
+    // lower matrix estimate.
     let lower_size = dim * (dim - 1) / 2;
     let scale = (v_max - v_min) / (sample.len() as f64);
-    let lower: Tensor<B, 1> = {
-        let mut res = Array::zeros((lower_size,));
-        let mut px = 0;
-        for ix in 0..dim-1 {
-            res[px] = scale;
-            px += ix + 2;
-        }
-        Tensor::from_data(res.as_slice().unwrap(), &device)
-    };
+    let lower: Tensor<B, 1> = Tensor::zeros(Shape::new([lower_size]), &device);
 
     CauchyModel {
         dim: dim,
         loc: Param::from_tensor(loc),
-        diagonal: Param::from_tensor(Tensor::ones(Shape::new([dim]), &device)),
+        diagonal: Param::from_tensor(Tensor::ones(Shape::new([dim]), &device) * scale),
         lower: Param::from_tensor(lower),
     }
 }

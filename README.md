@@ -53,6 +53,9 @@ Scale: 3.0323162228343508
 
 4. Documentation
 
+Use the following to enable math symbols in the documentation. See
+https://docs.rs/rustdoc-katex-demo/latest/rustdoc_katex_demo/
+
 ```
-cargo doc --no-deps
+RUSTDOCFLAGS="--html-in-header katex-header.html" cargo doc --no-deps --examples --open
 ```
