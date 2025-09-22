@@ -308,12 +308,7 @@ mod tests {
     use burn::tensor::{ElementConversion, Float};
 
     use super::*;
-
-    fn check_close<B: Backend, const D: usize>(a: Tensor<B, D, Float>, b: Tensor<B, D, Float>) {
-        let resp = (a.clone() - b.clone()).max_abs();
-        let msg = format!("TENSORS DIFFER\nGot >> \n{:?}\nExpected >> \n{:?}\n", a, b);
-        assert!(resp.into_scalar().elem::<f64>() < 1E-5, "{}", msg);
-    }
+    use mhde::check_close;
 
     #[test]
     fn test_matrix_2a() {

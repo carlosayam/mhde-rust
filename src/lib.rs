@@ -10,7 +10,8 @@ pub use ball_tree::Point;
 
 use burn::tensor::ElementConversion;
 
-/// A Burn Module must implement a `pdf` on data function
+/// A Burn Module must implement a `pdf` function to be able
+/// to use this estimator
 pub trait ModelTrait<B: AutodiffBackend>: AutodiffModule<B> {
     /// Calculates the PDF for the given $R^d$ data
     fn pdf(&self, data: &Tensor<B, 2>) -> Tensor<B, 1>;
@@ -93,17 +94,21 @@ fn volume_dim(dim: usize, radius: f64) -> f64 {
     }
 }
 
+/// Minimum number of observations to be able to apply Ranneby's results
+const MIN_OBSERVATIONS: usize = 16;
+
 fn calculate_balls<B: Backend>(data: &Vec<Vector<B>>, split: bool, device: &B::Device) -> (Tensor<B, 2>, Tensor<B, 1>) {
 
     // considered that the sample could be split to ensure i.i.d terms in the sum
     // but there were no apparent benefits; leaving this legacy in case need to investigate
     // again
     let num = data.len();
+    assert!(num >= MIN_OBSERVATIONS, "not enough observations");
     let dim = data[0].dim();
     let data1 = if split { &data[0..(num / 2)] } else { &data[..] };  // slice used for calculate volume to nearest
     let data2 = if split { &data[(num / 2)..] } else { &data[..] };   // slice used to iterate points
 
-    let algo = BallTree::new(data1.to_vec(), std::iter::repeat(()).take(num).collect());
+    let algo = BallTree::new(data1.to_vec(), std::iter::repeat(()).take(data1.len()).collect());
     let mut query = algo.query();
     let nearest = if split { 1 } else { 2 };
 
@@ -134,10 +139,11 @@ struct GradientCheck<'a, B: AutodiffBackend> {
 impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
     fn visit_float<const D: usize>(&mut self, _id: ParamId, tensor: &Tensor<B, D>) {
         if self.is_less {
-            let grads = tensor.grad(&self.grads).unwrap();
-            for (_i, tensor) in grads.iter_dim(0).enumerate() {
-                let val: f64 = tensor.into_scalar().elem();
-                self.is_less = self.is_less && val.abs() < self.epsilon;
+            if let Some(grads) = tensor.grad(&self.grads) {
+                for (_i, tensor) in grads.iter_dim(0).enumerate() {
+                    let val: f64 = tensor.into_scalar().elem();
+                    self.is_less = self.is_less && val.abs() < self.epsilon;
+                }
             }
         }
     }
@@ -152,8 +158,8 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
 ) -> (usize, M) {
 
     let config = TrainingConfig {
-        num_runs: 1000,
-        lr: 0.25,
+        num_runs: 2000,
+        lr: 0.1,
         config_optimizer: AdamConfig::new(),
     };
 
@@ -198,10 +204,25 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     (ix, model)
 }
 
+
+pub fn check_close<B: Backend, const D: usize>(a: Tensor<B, D, Float>, b: Tensor<B, D, Float>) {
+    let resp = (a.clone() - b.clone()).max_abs();
+    let msg = format!("TENSORS DIFFER\nGot >> \n{:?}\nExpected >> \n{:?}\n", a, b);
+    assert!(resp.into_scalar().elem::<f64>() < 1E-5, "{}", msg);
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
+
+    use burn::{backend::{Autodiff, NdArray}, tensor::Shape};
+    use rand::prelude::Distribution;
+    use rand_chacha::ChaCha8Rng;
+    use rand_core::SeedableRng;
+    use statrs::distribution::Uniform;
+
+    type AutoBE = Autodiff<NdArray<f64, i64>>;
 
     #[test]
     fn test_volume_dim() {
@@ -219,4 +240,51 @@ mod tests {
         }
 
     }
+
+    #[test]
+    fn test_calculate_balls() {
+        let device: <AutoBE as Backend>::Device = Default::default();
+
+        // Create a simple dataset to test the function
+        // Important: if one changes the seed, expected values need to be computed
+        let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(42);
+        let dist = Uniform::new(0.0, 1.0).unwrap();
+        let num = MIN_OBSERVATIONS;
+
+        let data: Vec<_> = (0..num)
+            .map(|_| Vector(Tensor::from_floats([dist.sample(&mut rng), dist.sample(&mut rng)], &device)))
+            .collect();
+
+        // Call the function with split = false
+        let (data_tensor, balls) = calculate_balls::<AutoBE>(&data, false, &device);
+
+        // Check if the output tensors have the correct shapes and values
+        assert_eq!(data_tensor.shape(), Shape::new([num, 2]));
+        assert_eq!(balls.shape(), Shape::new([num]));
+
+        // this was verified using Mathematica:
+        // data = ...;
+        // nnf = Nearest[data];
+        // (Pi Norm[# - nnf[#, 2][[2]]]^2) & /@ data
+        let exp_balls: Tensor<AutoBE, 1> = Tensor::from_floats(
+            [0.103625, 0.142726, 0.0929269, 0.142726, 0.0167641, 0.103625, 0.130203, 0.0167641,
+            0.0469551, 0.0827687, 0.0531408, 0.00347566, 0.0531408, 0.1072, 0.1072, 0.00347566], &device);
+        check_close(balls, exp_balls);
+
+        // Call the function with split = true
+        let (data_tensor_split, balls_split) = calculate_balls::<AutoBE>(&data, true, &device);
+
+        // Check if the output tensors have the correct shapes and values when split
+        assert_eq!(data_tensor_split.shape(), Shape::new([(num + 1) / 2, 2]));
+        assert_eq!(balls_split.shape(), Shape::new([(num + 1) / 2]));
+
+        // similarly, verified using Mathematica
+        // nnf = Nearest[data[[1 ;; 8]]];
+        // (Pi Norm[# - nnf[#, 2][[1]]]^2) & /@ data[[9 ;;]]
+        let exp_balls_split: Tensor<AutoBE, 1> = Tensor::from_floats(
+            [0.0741026,0.0929269,0.147737,0.0345391,0.235881,0.130203,0.197212,0.0290994], &device);
+        check_close(balls_split, exp_balls_split);
+
+    }
+
 }
