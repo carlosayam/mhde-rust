@@ -1,9 +1,14 @@
 use burn::{
-    module::{AutodiffModule, ModuleVisitor, ParamId}, optim::{AdamConfig, GradientsParams, Optimizer}, prelude::{Backend, Float, Tensor}, record::Record, tensor::{backend::AutodiffBackend, cast::ToElement}
+    module::{AutodiffModule, ModuleVisitor, ParamId},
+    optim::{AdamConfig, GradientsParams, Optimizer},
+    prelude::{Backend, Float, Tensor, Int},
+    tensor::{backend::AutodiffBackend, cast::ToElement}
 };
 
 use core::f64;
 use std::{f64::consts::PI, iter::zip};
+
+use rand::Rng;
 
 use ball_tree::BallTree;
 pub use ball_tree::Point;
@@ -149,6 +154,26 @@ impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
     }
 }
 
+fn extract_batch<B: Backend>(tensor: Tensor<B, 2>, balls: Tensor<B, 1>, num_samples: usize) -> (Tensor<B, 2>, Tensor<B, 1>)
+{
+    let num_rows = tensor.dims()[0];
+
+    // Generate random row indices
+    let mut rng = rand::thread_rng();
+    let mut random_indices_vec = Vec::new();
+    for _ in 0..num_samples {
+        random_indices_vec.push(rng.gen_range(0..num_rows) as i64);
+    }
+
+    // Convert the vector of indices into a Burn Int tensor
+    let random_indices = Tensor::<B, 1, Int>::from_data(random_indices_vec.as_slice(), &tensor.device());
+
+    // Select the rows using the random indices
+    (
+        tensor.select(0, random_indices.clone()),
+        balls.select(0, random_indices.clone())
+    )
+}
 
 pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     mut model: M,
@@ -158,8 +183,8 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
 ) -> (usize, M) {
 
     let config = TrainingConfig {
-        num_runs: 2000,
-        lr: 0.1,
+        num_runs: 10000,
+        lr: 0.05,
         config_optimizer: AdamConfig::new(),
     };
 
@@ -171,9 +196,14 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     let epsilon: f64 = 0.000001;
 
     let mut ix = 1;
+    let mut last_bhat = 2.0;
+    let batch_size = data.dims()[0] / 2;
+    let og_model = model.clone();
     while ix <= config.num_runs {
 
-        let hd = forward(&model, &data, &balls);
+        let (data_batch, balls_batch) = extract_batch(data.clone(), balls.clone(), batch_size);
+
+        let hd = forward(&model, &data_batch, &balls_batch);
 
         let grads = hd.backward();
 
@@ -189,14 +219,28 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         
         let grads_container = GradientsParams::from_grads(grads, &model);
 
-        model = optimizer.step(config.lr, model, grads_container);
+        model = optimizer.step(config.lr * last_bhat, model, grads_container);
+
+        // calculate HD for real
+        let hd = forward(&model, &data, &balls);
 
         let bhat_val: f64 = hd.into_scalar().elem::<f64>();
 
-        if ix % 10 == 0 {
+        if bhat_val > 0.0 && bhat_val < last_bhat {
+            last_bhat = bhat_val;
+        }
+
+        if bhat_val < -0.5 {
+            println!("restart! ({})", ix);
+            model = og_model.clone();
+            continue;
+        }
+
+        if ix % 50 == 0 {
             println!("HD^2 Hat: {} ({})", bhat_val, ix);
         }
-        if is_less {
+        if is_less || bhat_val.abs() < 0.001 {
+            println!("Final HD^2 Hat: {} ({})", bhat_val, ix);
             break;
         }
         ix += 1;
