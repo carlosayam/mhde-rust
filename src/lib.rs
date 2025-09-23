@@ -149,6 +149,9 @@ impl<B: AutodiffBackend> ModuleVisitor<B> for GradientCheck<'_, B> {
                     let val: f64 = tensor.into_scalar().elem();
                     self.is_less = self.is_less && val.abs() < self.epsilon;
                 }
+            } else {
+                // if we are missing a gradient, do not stop
+                self.is_less = false;
             }
         }
     }
@@ -183,8 +186,8 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
 ) -> (usize, M) {
 
     let config = TrainingConfig {
-        num_runs: 10000,
-        lr: 0.05,
+        num_runs: 15000,
+        lr: 0.02,
         config_optimizer: AdamConfig::new(),
     };
 
@@ -239,7 +242,7 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         if ix % 50 == 0 {
             println!("HD^2 Hat: {} ({})", bhat_val, ix);
         }
-        if is_less || bhat_val.abs() < 0.001 {
+        if (is_less && bhat_val.abs() < 0.1) || bhat_val.abs() < 0.001 {
             println!("Final HD^2 Hat: {} ({})", bhat_val, ix);
             break;
         }
