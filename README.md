@@ -1,3 +1,10 @@
+# REPOSITORY ARCHIVED
+
+-------------------------------------------------------------
+**I'm no longer pursuing this in Rust, switching back to Python**
+-------------------------------------------------------------
+
+
 # Minimum Hellinger Distance Estimator in Rust
 
 (c) 2025, Carlos Aya-Moreno
