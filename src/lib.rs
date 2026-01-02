@@ -1,6 +1,6 @@
 use burn::{
     module::{AutodiffModule, ModuleVisitor, ParamId},
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{AdamConfig, GradientsParams, Optimizer, SgdConfig},
     prelude::{Backend, Float, Tensor, Int},
     tensor::{backend::AutodiffBackend, cast::ToElement}
 };
@@ -132,7 +132,7 @@ fn calculate_balls<B: Backend>(data: &Vec<Vector<B>>, split: bool, device: &B::D
 pub struct TrainingConfig {
     pub num_runs: usize,
     pub lr: f64,
-    pub config_optimizer: AdamConfig,
+    pub config_optimizer: SgdConfig,
 }
 
 struct GradientCheck<'a, B: AutodiffBackend> {
@@ -186,9 +186,9 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
 ) -> (usize, M) {
 
     let config = TrainingConfig {
-        num_runs: 15000,
-        lr: 0.02,
-        config_optimizer: AdamConfig::new(),
+        num_runs: 10000,
+        lr: 0.004,
+        config_optimizer: SgdConfig::new(),
     };
 
     let sample_wrapped: Vec<Vector<B>> = sample.iter().map(|tensor: &Tensor<B, 1>| Vector(tensor.clone())).collect();
@@ -198,11 +198,19 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
     let mut optimizer = config.config_optimizer.init::<B, M>();
     let epsilon: f64 = 0.000001;
 
+    let orig_model = model.clone();
+
     let mut ix = 1;
-    let mut last_bhat = 2.0;
-    let batch_size = data.dims()[0] / 2;
-    let og_model = model.clone();
-    while ix <= config.num_runs {
+    let num = sample.len();
+    let batch_size = num / 20;
+    let batch_in_sample = num / batch_size + 1;
+    let max_iter = config.num_runs * batch_in_sample;
+    let min_iter = (config.num_runs / 100) * batch_in_sample;
+    let ix_iter = max_iter / 25 + 1;
+    let mut lr_temp = 0.0;
+    println!("Max runs: {}", max_iter);
+
+    while ix < max_iter {
 
         let (data_batch, balls_batch) = extract_batch(data.clone(), balls.clone(), batch_size);
 
@@ -222,28 +230,32 @@ pub fn run<B: AutodiffBackend, M: ModelTrait<B>>(
         
         let grads_container = GradientsParams::from_grads(grads, &model);
 
-        model = optimizer.step(config.lr * last_bhat, model, grads_container);
+        lr_temp = 1.0 - ((ix / 2) as f64) / (max_iter as f64);
+
+        model = optimizer.step(config.lr * lr_temp, model, grads_container);
 
         // calculate HD for real
         let hd = forward(&model, &data, &balls);
 
-        let bhat_val: f64 = hd.into_scalar().elem::<f64>();
+        let hdhat_val: f64 = hd.into_scalar().elem::<f64>();
 
-        if bhat_val > 0.0 && bhat_val < last_bhat {
-            last_bhat = bhat_val;
-        }
-
-        if bhat_val < -0.5 {
-            println!("restart! ({})", ix);
-            model = og_model.clone();
+        if hdhat_val < -0.5 {
+            model = orig_model.clone();
+            // last_hd = 1.0;
+            println!("Reseting (ix={})", ix);
             continue;
         }
 
-        if ix % 50 == 0 {
-            println!("HD^2 Hat: {} ({})", bhat_val, ix);
+        // if hdhat_val.abs() < last_hd * 0.9 {
+        //     last_hd = hdhat_val.abs();
+        // }
+
+        if ix % ix_iter == 0 {
+            println!("HD^2 Hat: {} (ix={}, lr={})", hdhat_val, ix, config.lr * lr_temp);
         }
-        if (is_less && bhat_val.abs() < 0.1) || bhat_val.abs() < 0.001 {
-            println!("Final HD^2 Hat: {} ({})", bhat_val, ix);
+
+        if ix > min_iter && is_less {
+            println!("Final HD^2 Hat: {} ({})", hdhat_val, ix);
             break;
         }
         ix += 1;
